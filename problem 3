@@ -1,0 +1,141 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// --- LCD Setup (I2C 16x2) ---
+LiquidCrystal_I2C lcd(0x27, 16, 2); // adjust 0x27 if not correct
+
+// --- Motor Driver Pins (L298N) ---
+const int IN1 = 9;   // Motor A
+const int IN2 = 8;
+const int IN3 = 7;   // Motor B
+const int IN4 = 6;
+const int ENA = 10;  // PWM for Motor A
+const int ENB = 5;   // PWM for Motor B
+
+// --- Speed Sensor (LM393) ---
+const int speedSensorPin = 2;  // D0 output to Arduino pin 2
+volatile unsigned int pulseCount = 0;
+
+// --- Ultrasonic Sensor (HC-SR04) ---
+const int trigPin = 12;
+const int echoPin = 13;
+
+// --- Servo (SG90) ---
+Servo servo;
+const int servoPin = 11;
+
+// --- Variables ---
+unsigned long prevTime = 0;
+float speedKmh = 0;
+float speedRPM = 0;
+long distance = 0;
+
+void setup() {
+  // --- Motor pins ---
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+  // --- Speed sensor ---
+  pinMode(speedSensorPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(speedSensorPin), countPulse, RISING);
+
+  // --- Ultrasonic ---
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // --- Servo ---
+  servo.attach(servoPin);
+
+  // --- LCD ---
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Car System Init");
+  delay(2000);
+  lcd.clear();
+
+  // Start motors forward
+  moveForward(180); // speed (0-255)
+}
+
+void loop() {
+  // --- Measure speed every 1s ---
+  if (millis() - prevTime >= 1000) {
+    detachInterrupt(digitalPinToInterrupt(speedSensorPin));
+
+    // Example: 20 slots on encoder disc = 20 pulses per revolution
+    speedRPM = (pulseCount / 20.0) * 60.0; 
+    float wheelCircumference = 0.21; // meters (example: 67mm radius wheel)
+    speedKmh = ((speedRPM / 60.0) * wheelCircumference) * 3.6;
+
+    pulseCount = 0;
+    prevTime = millis();
+    attachInterrupt(digitalPinToInterrupt(speedSensorPin), countPulse, RISING);
+  }
+
+  // --- Measure distance ---
+  distance = getDistance();
+
+  // --- Safe distance formula ---
+  // Example formula: SafeDistance = (speedKmh * 1000/3600) * 1s reaction + braking distance
+  float speedMs = speedKmh / 3.6;
+  float reactionTime = 1.0; // 1 second reaction
+  float brakingDecel = 2.0; // m/s^2, assumed deceleration
+  float safeDistance = speedMs * reactionTime + (speedMs * speedMs) / (2 * brakingDecel);
+
+  // --- LCD Display ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("S:");
+  lcd.print(speedKmh, 1);
+  lcd.print("kmh");
+
+  lcd.setCursor(0, 1);
+  lcd.print("D:");
+  lcd.print(distance);
+  lcd.print("cm ");
+
+  if (distance / 100.0 < safeDistance) {
+    lcd.print("NOT SAFE");
+  } else {
+    lcd.print("SAFE");
+  }
+
+  delay(500);
+}
+
+// --- Functions ---
+
+// Motor forward
+void moveForward(int pwm) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENA, pwm);
+  analogWrite(ENB, pwm);
+}
+
+// Count pulses from speed sensor
+void countPulse() {
+  pulseCount++;
+}
+
+// Measure distance with ultrasonic
+long getDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+  long dist = duration * 0.034 / 2; // cm
+  return dist;
+}
